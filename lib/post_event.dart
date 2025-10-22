@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'menu_navigation.dart';
 import 'shared.dart';
 import 'post_event_form.dart';
+import 'services/audit_logger.dart'; // 👈 add this
 
 class PostEvent extends StatefulWidget {
   final User user;
@@ -56,16 +56,27 @@ class _PostEventState extends State<PostEvent> {
     return snapshot.docs.length;
   }
 
-
   void submitFairEvent() async {
-    if (selectedDateStart == null || selectedDateEnd == null) {
+    if (selectedDateStart == null || selectedDateEnd == null || _selectedEventType == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Please fill in all fields')),
+        const SnackBar(content: Text('Please fill in all fields')),
+      );
+      // 🔎 log validation fail
+      await AuditLogger.logPerDay(
+        action: 'EVENT_SUBMIT_INVALID',
+        meta: {
+          'eventType': 'FAIR',
+          'eventName': _selectedEventType,
+          'reason': 'missing date(s) or event type',
+        },
+        uid: widget.user.username,
+        email: widget.user.email,
       );
       return;
     }
 
-    String dateRange = '${selectedDateStart!.day.toString().padLeft(2, '0')}/${selectedDateStart!.month.toString().padLeft(2, '0')}/${selectedDateStart!.year} - '
+    String dateRange =
+        '${selectedDateStart!.day.toString().padLeft(2, '0')}/${selectedDateStart!.month.toString().padLeft(2, '0')}/${selectedDateStart!.year} - '
         '${selectedDateEnd!.day.toString().padLeft(2, '0')}/${selectedDateEnd!.month.toString().padLeft(2, '0')}/${selectedDateEnd!.year}';
 
     String venue = 'Setia Spice Arena';
@@ -80,27 +91,39 @@ class _PostEventState extends State<PostEvent> {
       time = 'To be decided';
     }
 
-    String eventKey = _selectedEventType?.replaceAll(' ', '_') ?? 'Fair';
+    String eventKey = _selectedEventType!.replaceAll(' ', '_');
 
     Map<String, dynamic> eventData = {
-      'name': _selectedEventType ?? 'Fair Event',
+      'name': _selectedEventType,
       'description': description,
       'venue': venue,
       'time': time,
-      'start_date': '${selectedDateStart!.day.toString().padLeft(2, '0')}/${selectedDateStart!.month.toString().padLeft(2, '0')}/${selectedDateStart!.year}',
-      'end_date': '${selectedDateEnd!.day.toString().padLeft(2, '0')}/${selectedDateEnd!.month.toString().padLeft(2, '0')}/${selectedDateEnd!.year}',
+      'start_date':
+      '${selectedDateStart!.day.toString().padLeft(2, '0')}/${selectedDateStart!.month.toString().padLeft(2, '0')}/${selectedDateStart!.year}',
+      'end_date':
+      '${selectedDateEnd!.day.toString().padLeft(2, '0')}/${selectedDateEnd!.month.toString().padLeft(2, '0')}/${selectedDateEnd!.year}',
       'date_range': dateRange,
     };
 
     try {
-      await event
-          .doc(eventKey)
-          .set(eventData);
+      await event.doc(eventKey).set(eventData);
 
       await clearVotesFromAllUsers(eventKey);
 
+      // 🔎 log success
+      await AuditLogger.logPerDay(
+        action: 'EVENT_CREATED',
+        meta: {
+          'eventType': 'FAIR',
+          'eventName': _selectedEventType,
+          'eventId': eventKey,
+        },
+        uid: widget.user.username,
+        email: widget.user.email,
+      );
+
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Fair event posted successfully!')),
+        const SnackBar(content: Text('Fair event posted successfully!')),
       );
 
       setState(() {
@@ -108,6 +131,18 @@ class _PostEventState extends State<PostEvent> {
         selectedDateEnd = null;
       });
     } catch (e) {
+      // 🔎 log error
+      await AuditLogger.logPerDay(
+        action: 'EVENT_CREATE_ERROR',
+        meta: {
+          'eventType': 'FAIR',
+          'eventName': _selectedEventType,
+          'error': e.toString(),
+        },
+        uid: widget.user.username,
+        email: widget.user.email,
+      );
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to post event: $e')),
       );
@@ -120,42 +155,64 @@ class _PostEventState extends State<PostEvent> {
     fetchTotalUsers().then((count) {
       setState(() {
         maxUsers = count;
-
       });
     });
   }
 
   void submitLeadsEvent() async {
-    if (selectedDate == null || selectedTime == null) {
+    if (selectedDate == null || selectedTime == null || _selectedEventType == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Please fill in all fields')),
+        const SnackBar(content: Text('Please fill in all fields')),
+      );
+      // 🔎 log validation fail
+      await AuditLogger.logPerDay(
+        action: 'EVENT_SUBMIT_INVALID',
+        meta: {
+          'eventType': 'LEADS',
+          'eventName': _selectedEventType,
+          'reason': 'missing date or time or event type',
+        },
+        uid: widget.user.username,
+        email: widget.user.email,
       );
       return;
     }
 
-    String date = '${selectedDate!.day.toString().padLeft(2, '0')}/${selectedDate!.month.toString().padLeft(2, '0')}/${selectedDate!.year}';
+    String date =
+        '${selectedDate!.day.toString().padLeft(2, '0')}/${selectedDate!.month.toString().padLeft(2, '0')}/${selectedDate!.year}';
 
-    String time = '${selectedTime!.hour.toString().padLeft(2, '0')}:${selectedTime!.minute.toString().padLeft(2, '0')}';
+    String time =
+        '${selectedTime!.hour.toString().padLeft(2, '0')}:${selectedTime!.minute.toString().padLeft(2, '0')}';
 
     String venue = 'ADCO';
 
     Map<String, dynamic> eventData = {
-      'name': _selectedEventType ?? 'Leads',
-      'venue' : venue,
+      'name': _selectedEventType,
+      'venue': venue,
       'time': time,
       'date': date,
-      'max_participant' : maxParticipants ?? 1,
+      'max_participant': maxParticipants ?? 1,
     };
 
     try {
-      await event
-          .doc('lead')
-          .set(eventData);
-
+      await event.doc('lead').set(eventData);
       await clearVotesFromAllUsers('lead');
 
+      // 🔎 log success
+      await AuditLogger.logPerDay(
+        action: 'EVENT_CREATED',
+        meta: {
+          'eventType': 'LEADS',
+          'eventName': _selectedEventType,
+          'eventId': 'lead',
+          'max_participant': maxParticipants ?? 1,
+        },
+        uid: widget.user.username,
+        email: widget.user.email,
+      );
+
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Fair event posted successfully!')),
+        const SnackBar(content: Text('Leads event posted successfully!')),
       );
 
       setState(() {
@@ -163,36 +220,77 @@ class _PostEventState extends State<PostEvent> {
         selectedTime = null;
       });
     } catch (e) {
+      // 🔎 log error
+      await AuditLogger.logPerDay(
+        action: 'EVENT_CREATE_ERROR',
+        meta: {
+          'eventType': 'LEADS',
+          'eventName': _selectedEventType,
+          'error': e.toString(),
+        },
+        uid: widget.user.username,
+        email: widget.user.email,
+      );
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to post event: $e')),
       );
     }
   }
 
-
   void submitAGMEvent() async {
-    if (selectedDate == null || selectedStartTime == null || selectedEndTime == null || venue!.isEmpty) {
+    if (selectedDate == null ||
+        selectedStartTime == null ||
+        selectedEndTime == null ||
+        venue == null ||
+        venue!.isEmpty ||
+        _selectedEventType == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please fill in all fields')),
+      );
+      // 🔎 log validation fail
+      await AuditLogger.logPerDay(
+        action: 'EVENT_SUBMIT_INVALID',
+        meta: {
+          'eventType': 'AGM',
+          'eventName': _selectedEventType,
+          'reason': 'missing date/time/venue or event type',
+        },
+        uid: widget.user.username,
+        email: widget.user.email,
       );
       return;
     }
 
-    String date = '${selectedDate!.day.toString().padLeft(2, '0')}/${selectedDate!.month.toString().padLeft(2, '0')}/${selectedDate!.year}';
-    String timeRange = '${selectedStartTime!.hour.toString().padLeft(2, '0')}:${selectedStartTime!.minute.toString().padLeft(2, '0')} - '
+    String date =
+        '${selectedDate!.day.toString().padLeft(2, '0')}/${selectedDate!.month.toString().padLeft(2, '0')}/${selectedDate!.year}';
+    String timeRange =
+        '${selectedStartTime!.hour.toString().padLeft(2, '0')}:${selectedStartTime!.minute.toString().padLeft(2, '0')} - '
         '${selectedEndTime!.hour.toString().padLeft(2, '0')}:${selectedEndTime!.minute.toString().padLeft(2, '0')}';
 
     Map<String, dynamic> eventData = {
-      'name': _selectedEventType ?? 'AGM',
+      'name': _selectedEventType,
       'venue': venue,
       'time': timeRange,
       'date': date,
     };
 
     try {
-      await event.doc('agm').set(eventData);  // ✅ Make sure to use 'agm' not 'lead'
+      await event.doc('agm').set(eventData);
+      await clearVotesFromAllUsers('agm');
 
-      await clearVotesFromAllUsers('agm');  // ✅ Clear previous votes related to this category
+      // 🔎 log success
+      await AuditLogger.logPerDay(
+        action: 'EVENT_CREATED',
+        meta: {
+          'eventType': 'AGM',
+          'eventName': _selectedEventType,
+          'eventId': 'agm',
+          'venue': venue,
+        },
+        uid: widget.user.username,
+        email: widget.user.email,
+      );
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('AGM event posted successfully!')),
@@ -205,25 +303,36 @@ class _PostEventState extends State<PostEvent> {
         venue = '';
       });
     } catch (e) {
+      // 🔎 log error
+      await AuditLogger.logPerDay(
+        action: 'EVENT_CREATE_ERROR',
+        meta: {
+          'eventType': 'AGM',
+          'eventName': _selectedEventType,
+          'error': e.toString(),
+        },
+        uid: widget.user.username,
+        email: widget.user.email,
+      );
+
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to post AGM event: $e')),
+        SnackBar(content: Text('Failed to post AGM: $e')),
       );
     }
   }
-
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Post Event'),
+        title: const Text('Post Event'),
         leading: Builder(
           builder: (context) => IconButton(
-            icon: Icon(Icons.menu),
+            icon: const Icon(Icons.menu),
             onPressed: () => Scaffold.of(context).openDrawer(),
           ),
         ),
-        backgroundColor: Color(0xFFFFF1D5),
+        backgroundColor: const Color(0xFFFFF1D5),
       ),
       drawer: AppDrawer(user: widget.user),
       body: Padding(
@@ -261,9 +370,8 @@ class _PostEventState extends State<PostEvent> {
                   selectedDateEnd: selectedDateEnd,
                   onStartDatePicked: (date) => setState(() => selectedDateStart = date),
                   onEndDatePicked: (date) => setState(() => selectedDateEnd = date),
-                  onSubmit : submitFairEvent,
+                  onSubmit: submitFairEvent,
                 ),
-
               if (_selectedEventType == 'AGM')
                 buildAGMForm(
                   context: context,
@@ -278,19 +386,18 @@ class _PostEventState extends State<PostEvent> {
                   onVenueChanged: (value) => venue = value,
                   onSubmit: submitAGMEvent,
                 ),
-
               if (_selectedEventType == 'Leads')
                 buildLeadsForm(
-                context: context,
-                selectedEventType: _selectedEventType,
-                selectedDate: selectedDate,
-                selectedTime: selectedTime,
-                maxUsers: maxUsers,
-                maxParticipants: maxParticipants ?? 1,
-                onDatePicked: (date) => setState(() => selectedDate = date),
-                onTimePicked: (time) => setState(() => selectedTime = time),
-                onMaxParticipantsChanged: (value) => setState(() => maxParticipants = value),
-                onSubmit: submitLeadsEvent,
+                  context: context,
+                  selectedEventType: _selectedEventType,
+                  selectedDate: selectedDate,
+                  selectedTime: selectedTime,
+                  maxUsers: maxUsers,
+                  maxParticipants: maxParticipants ?? 1,
+                  onDatePicked: (date) => setState(() => selectedDate = date),
+                  onTimePicked: (time) => setState(() => selectedTime = time),
+                  onMaxParticipantsChanged: (value) => setState(() => maxParticipants = value),
+                  onSubmit: submitLeadsEvent,
                 ),
             ]
           ],

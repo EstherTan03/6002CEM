@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'manage_send_email.dart';
+import 'services/audit_logger.dart'; // ✅ add logger
 
 Future<void> showEditDialog(
     BuildContext context,
@@ -27,7 +28,6 @@ Future<void> showEditDialog(
               SizedBox(height: 20),
               Text('Do you want to accept this user request?'),
             ],
-
           ),
           actions: [
             TextButton(
@@ -71,6 +71,7 @@ Future<void> showEditDialog(
                       .collection('request')
                       .doc(userData['username'])
                       .delete();
+
                   Navigator.pop(context);
                   fetchUsers();
                 }
@@ -120,6 +121,19 @@ Future<void> showEditDialog(
                         .collection('username')
                         .doc(userData['username'])
                         .update({'role': selectedRole});
+
+                    // ✅ Log: role change
+                    await AuditLogger.logPerDay(
+                      action: 'ROLE_CHANGED',
+                      uid: userData['username'],
+                      email: userData['email'],
+                      meta: {
+                        'from': userData['role'],
+                        'to': selectedRole,
+                        'performed_by': admin_email,
+                      },
+                    );
+
                     Navigator.pop(context);
                     fetchUsers();
                   },
@@ -156,6 +170,19 @@ Future<void> showEditDialog(
                           .collection('username')
                           .doc(userData['username'])
                           .delete();
+
+                      // ✅ Log: user deleted
+                      await AuditLogger.logPerDay(
+                        action: 'USER_DELETED',
+                        uid: userData['username'],
+                        email: userData['email'],
+                        meta: {
+                          'name': userData['name'],
+                          'role': userData['role'],
+                          'performed_by': admin_email,
+                        },
+                      );
+
                       Navigator.pop(context);
                       fetchUsers();
                     }
@@ -247,12 +274,25 @@ Future<void> showAcceptDialog(
                   await firestore.collection('request').doc(requestData['name']).delete();
 
                   await firestore.collection('username').doc(username).set({
-                    'username' : _usernameController.text,
+                    'username': _usernameController.text,
                     'name': requestData['name'],
                     'email': requestData['email'],
                     'role': selectedRole,
                     'password': '123', // default password
                   });
+
+                  // ✅ Log: user created (accepted)
+                  await AuditLogger.logPerDay(
+                    action: 'USER_CREATED',
+                    uid: username,
+                    email: requestData['email'],
+                    meta: {
+                      'name': requestData['name'],
+                      'role': selectedRole,
+                      'performed_by': admin_email,
+                      'source': 'request_accept',
+                    },
+                  );
 
                   Navigator.pop(context);
                   fetchUsers();
@@ -261,10 +301,7 @@ Future<void> showAcceptDialog(
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(content: Text("User $name accepted successfully")),
                   );
-
-                  sendEmail(_usernameController.text,admin_email,requestData['email'],);
-                  print('Sfewrwerwer');
-
+                  sendEmail(_usernameController.text, requestData['email']);
                 },
                 child: Text('Submit'),
               ),
