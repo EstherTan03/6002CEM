@@ -31,16 +31,35 @@ class _ProfilePageState extends State<ProfilePage> {
     passwordController = TextEditingController(text: widget.user.password ?? '');
   }
 
+  // ✅ Password strength checker
+  bool _isStrongPassword(String password) {
+    final hasMinLength = password.length >= 8;
+    final hasSpecialChar = RegExp(r'[!@#$%^&*(),.?":{}|<>_\-\\/\[\];~+=]').hasMatch(password);
+    return hasMinLength && hasSpecialChar;
+  }
+
   Future<void> saveChanges() async {
     setState(() => isSaving = true);
 
-    // ✅ ADD: capture old/new values & what changed (no plaintext in logs)
+    // ✅ Capture old/new values & what changed (no plaintext in logs)
     final oldEmail = widget.user.email ?? '';
     final oldPassword = widget.user.password ?? '';
     final newEmail = emailController.text.trim();
     final newPassword = passwordController.text.trim();
     final emailChanged = oldEmail != newEmail;
     final passwordChanged = oldPassword != newPassword;
+
+    // ✅ Enhanced Password Validation
+    if (passwordChanged && !_isStrongPassword(newPassword)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Password must be at least 8 characters long and include a special character.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      setState(() => isSaving = false);
+      return;
+    }
 
     try {
       await FirebaseFirestore.instance

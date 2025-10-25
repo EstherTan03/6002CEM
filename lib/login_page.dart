@@ -45,7 +45,7 @@ class _LoginPageState extends State<LoginPage> {
         // 🔎 Write audit log (per-day structure)
         await AuditLogger.logPerDay(
           action: 'LOGIN_SUCCESS',
-          uid: username,                 // or doc.id if you use uid as doc id
+          uid: username,                 // use uid as doc id
           email: email.isNotEmpty ? email : null,
           meta: {
             'screen': 'LoginPage',

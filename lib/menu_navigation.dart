@@ -53,7 +53,11 @@ class AppDrawer extends StatelessWidget {
         break;
 
       case 'Logout':
-      // 🔎 write audit log BEFORE navigating away
+        Navigator.pushAndRemoveUntil(
+          context, MaterialPageRoute(builder: (_) => const LoginPage()), (route) => false,
+        );
+
+        // 🔎 write audit log BEFORE navigating away
         try {
           await AuditLogger.logPerDay(
             action: 'LOGOUT',
@@ -68,9 +72,6 @@ class AppDrawer extends StatelessWidget {
           // ignore logging failures so logout still proceeds
         }
 
-        Navigator.pushAndRemoveUntil(
-          context, MaterialPageRoute(builder: (_) => const LoginPage()), (route) => false,
-        );
         break;
 
       default:
