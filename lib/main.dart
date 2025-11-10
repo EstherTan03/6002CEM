@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
-
 import 'login_page.dart';
 
 Future<void> main() async {
@@ -33,8 +32,8 @@ class _MyAppState extends State<MyApp>{
   @override
   Widget build(BuildContext context) {
     // TODO: implement build
-    return const MaterialApp(
-      home: LoginPage(),
+    return MaterialApp(
+        home: const LoginPage(),
     );
   }
 }

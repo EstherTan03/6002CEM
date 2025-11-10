@@ -1,18 +1,20 @@
-// manage user
+// lib/manage_user.dart
 import 'package:flutter/material.dart';
-
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:bcrypt/bcrypt.dart';
 
 import 'manage_send_email.dart';
+import 'services/audit_logger.dart';
 
+/// Show dialog for editing a user or handling a user request
 Future<void> showEditDialog(
     BuildContext context,
     Map<String, dynamic> userData,
     VoidCallback fetchUsers,
-    String admin_email,
+    String adminEmail,
     ) async {
+  // If it's a request (user pending approval)
   if (userData['isRequest'] == true) {
-    // Request dialog with Accept/Cancel buttons
     showDialog(
       context: context,
       builder: (context) {
@@ -24,65 +26,62 @@ Future<void> showEditDialog(
               Text('Name: ${userData['name']}'),
               Text('Email: ${userData['email']}'),
               Text('Role: ${userData['role']}'),
-              SizedBox(height: 20),
-              Text('Do you want to accept this user request?'),
+              const SizedBox(height: 20),
+              const Text('Do you want to accept this user request?'),
             ],
-
           ),
           actions: [
+            // ✅ Accept
             TextButton(
               onPressed: () {
                 Navigator.pop(context);
-                showAcceptDialog(context, userData, fetchUsers, admin_email);
+                showAcceptDialog(context, userData, fetchUsers, adminEmail);
               },
-              child: Text('Accept'),
+              child: const Text('Accept'),
             ),
+
+            // ❌ Cancel
             TextButton(
-              onPressed: () {
-                // Just close the dialog without deleting
-                Navigator.pop(context);
-              },
-              child: Text('Cancel'),
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
             ),
+
+            // 🗑 Delete Request
             TextButton(
               onPressed: () async {
-                final confirm = await showDialog<bool>(
-                  context: context,
-                  builder: (BuildContext context) {
-                    return AlertDialog(
-                      title: Text('Confirm Deletion'),
-                      content: Text('Are you sure you want to delete this user?'),
-                      actions: [
-                        TextButton(
-                          onPressed: () => Navigator.pop(context, false),
-                          child: Text('Cancel'),
-                        ),
-                        TextButton(
-                          onPressed: () => Navigator.pop(context, true),
-                          child: Text('Delete', style: TextStyle(color: Colors.red)),
-                        ),
-                      ],
-                    );
-                  },
-                );
+                final confirm = await showConfirmDeleteDialog(context);
 
                 if (confirm == true) {
                   await FirebaseFirestore.instance
                       .collection('request')
                       .doc(userData['username'])
                       .delete();
+
+                  // ✅ Log deletion of request
+                  await AuditLogger.logPerDay(
+                    action: 'REQUEST_DELETED',
+                    uid: userData['username'],
+                    email: userData['email'],
+                    meta: {
+                      'name': userData['name'],
+                      'performed_by': adminEmail,
+                    },
+                  );
+
                   Navigator.pop(context);
                   fetchUsers();
                 }
               },
-              child: Text('Delete', style: TextStyle(color: Colors.red)),
+              child: const Text('Delete', style: TextStyle(color: Colors.red)),
             ),
           ],
         );
       },
     );
-  } else {
-    // Normal user edit dialog
+  }
+
+  // ================== Normal User Editing ==================
+  else {
     String selectedRole = userData['role'];
 
     showDialog(
@@ -96,15 +95,13 @@ Future<void> showEditDialog(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text('Name: ${userData['name']}'),
-                  SizedBox(height: 10),
+                  const SizedBox(height: 10),
                   DropdownButton<String>(
                     value: selectedRole,
                     onChanged: (value) {
-                      setState(() {
-                        selectedRole = value!;
-                      });
+                      setState(() => selectedRole = value!);
                     },
-                    items: ['user', 'super_admin', 'admin']
+                    items: ['user', 'admin', 'super_admin']
                         .map((role) => DropdownMenuItem(
                       value: role,
                       child: Text(role),
@@ -114,53 +111,65 @@ Future<void> showEditDialog(
                 ],
               ),
               actions: [
+                // 💾 Save updated role
                 TextButton(
                   onPressed: () async {
                     await FirebaseFirestore.instance
                         .collection('username')
                         .doc(userData['username'])
                         .update({'role': selectedRole});
+
+                    // ✅ Log role change
+                    await AuditLogger.logPerDay(
+                      action: 'ROLE_CHANGED',
+                      uid: userData['username'],
+                      email: userData['email'],
+                      meta: {
+                        'from': userData['role'],
+                        'to': selectedRole,
+                        'performed_by': adminEmail,
+                      },
+                    );
+
                     Navigator.pop(context);
                     fetchUsers();
                   },
-                  child: Text('Save'),
+                  child: const Text('Save'),
                 ),
+
                 TextButton(
                   onPressed: () => Navigator.pop(context),
-                  child: Text('Cancel'),
+                  child: const Text('Cancel'),
                 ),
+
+                // 🗑 Delete user
                 TextButton(
                   onPressed: () async {
-                    final confirm = await showDialog<bool>(
-                      context: context,
-                      builder: (BuildContext context) {
-                        return AlertDialog(
-                          title: Text('Confirm Deletion'),
-                          content: Text('Are you sure you want to delete this user?'),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.pop(context, false),
-                              child: Text('Cancel'),
-                            ),
-                            TextButton(
-                              onPressed: () => Navigator.pop(context, true),
-                              child: Text('Delete', style: TextStyle(color: Colors.red)),
-                            ),
-                          ],
-                        );
-                      },
-                    );
+                    final confirm = await showConfirmDeleteDialog(context);
 
                     if (confirm == true) {
                       await FirebaseFirestore.instance
                           .collection('username')
                           .doc(userData['username'])
                           .delete();
+
+                      // ✅ Log user deletion
+                      await AuditLogger.logPerDay(
+                        action: 'USER_DELETED',
+                        uid: userData['username'],
+                        email: userData['email'],
+                        meta: {
+                          'name': userData['name'],
+                          'role': userData['role'],
+                          'performed_by': adminEmail,
+                        },
+                      );
+
                       Navigator.pop(context);
                       fetchUsers();
                     }
                   },
-                  child: Text('Delete', style: TextStyle(color: Colors.red)),
+                  child: const Text('Delete', style: TextStyle(color: Colors.red)),
                 ),
               ],
             );
@@ -171,13 +180,14 @@ Future<void> showEditDialog(
   }
 }
 
+/// Accept Request Dialog
 Future<void> showAcceptDialog(
     BuildContext context,
     Map<String, dynamic> requestData,
     VoidCallback fetchUsers,
-    String admin_email,
+    String adminEmail,
     ) async {
-  final _usernameController = TextEditingController();
+  final usernameController = TextEditingController();
   String selectedRole = requestData['role'];
 
   showDialog(
@@ -186,97 +196,132 @@ Future<void> showAcceptDialog(
       return StatefulBuilder(
         builder: (context, setState) {
           return AlertDialog(
-            title: Text('Accept User Request'),
+            title: const Text('Accept User Request'),
             content: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text('Name: ${requestData['name']}'),
-                  SizedBox(height: 10),
+                  const SizedBox(height: 10),
                   Text('Email: ${requestData['email']}'),
-                  SizedBox(height: 10),
+                  const SizedBox(height: 10),
+
+                  // Username field
                   TextField(
-                    controller: _usernameController,
-                    decoration: InputDecoration(
+                    controller: usernameController,
+                    decoration: const InputDecoration(
                       labelText: 'Username',
                       border: OutlineInputBorder(),
                     ),
                   ),
-                  SizedBox(height: 10),
+                  const SizedBox(height: 10),
+
+                  // Dropdown role
                   DropdownButton<String>(
                     value: selectedRole,
-                    onChanged: (value) {
-                      setState(() {
-                        selectedRole = value!;
-                      });
-                    },
-                    items: ['user', 'super_admin', 'admin']
+                    onChanged: (value) => setState(() => selectedRole = value!),
+                    items: ['user', 'admin', 'super_admin']
                         .map((role) => DropdownMenuItem(
                       value: role,
                       child: Text(role),
                     ))
                         .toList(),
                   ),
-                  SizedBox(height: 10),
-                  Text('Password is set to default: 123'),
+                  const SizedBox(height: 10),
+
+                  const Text('Password is set to default: Sample123@'),
                 ],
               ),
             ),
             actions: [
               TextButton(
                 onPressed: () async {
-                  final username = _usernameController.text.trim();
+                  final username = usernameController.text.trim();
                   if (username.isEmpty) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Please enter a username')),
-                    );
+                    ScaffoldMessenger.of(context)
+                        .showSnackBar(const SnackBar(content: Text('Please enter a username')));
                     return;
                   }
 
                   final firestore = FirebaseFirestore.instance;
-                  final existingDoc =
-                  await firestore.collection('username').doc(username).get();
+                  final existingDoc = await firestore.collection('username').doc(username).get();
 
                   if (existingDoc.exists) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Username already exists. Choose another.')),
+                      const SnackBar(content: Text('Username already exists. Choose another.')),
                     );
                     return;
                   }
 
+                  // Remove request entry
                   await firestore.collection('request').doc(requestData['name']).delete();
 
+                  // Create new user with hashed default pwd
+                  const defaultPassword = 'Sample123@';
+                  final hashedPassword = BCrypt.hashpw(defaultPassword, BCrypt.gensalt());
+
                   await firestore.collection('username').doc(username).set({
-                    'username' : _usernameController.text,
+                    'username': username,
                     'name': requestData['name'],
                     'email': requestData['email'],
                     'role': selectedRole,
-                    'password': '123', // default password
+                    'password': hashedPassword,
                   });
+
+                  // ✅ Log accepted request
+                  await AuditLogger.logPerDay(
+                    action: 'USER_CREATED',
+                    uid: username,
+                    email: requestData['email'],
+                    meta: {
+                      'name': requestData['name'],
+                      'role': selectedRole,
+                      'performed_by': adminEmail,
+                      'source': 'request_accept',
+                    },
+                  );
 
                   Navigator.pop(context);
                   fetchUsers();
-                  String name = requestData['name'];
 
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text("User $name accepted successfully")),
+                    SnackBar(content: Text("User ${requestData['name']} accepted successfully")),
                   );
 
-                  sendEmail(_usernameController.text,admin_email,requestData['email'],);
-                  print('Sfewrwerwer');
-
+                  sendEmail(username, requestData['email']);
                 },
-                child: Text('Submit'),
+                child: const Text('Submit'),
               ),
               TextButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                },
-                child: Text('Cancel', style: TextStyle(color: Colors.red)),
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel', style: TextStyle(color: Colors.red)),
               ),
             ],
           );
         },
+      );
+    },
+  );
+}
+
+/// Confirm delete dialog reusable
+Future<bool?> showConfirmDeleteDialog(BuildContext context) {
+  return showDialog<bool>(
+    context: context,
+    builder: (context) {
+      return AlertDialog(
+        title: const Text('Confirm Deletion'),
+        content: const Text('Are you sure you want to delete this user?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
       );
     },
   );

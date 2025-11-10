@@ -2,7 +2,6 @@
 import 'package:flutter/material.dart';
 
 import 'menu_list.dart';
-
 import 'shared.dart';
 
 import 'login_page.dart';
@@ -11,41 +10,70 @@ import 'post_event.dart';
 import 'schedule_page.dart';
 import 'manage_user.dart';
 import 'profile_page.dart';
+import 'services/audit_logger.dart'; // 👈 add this
 
 class AppDrawer extends StatelessWidget {
-
   final User user;
 
   const AppDrawer({Key? key, required this.user}) : super(key: key);
 
   // Handle menu tap navigation
-  void handleMenuTap(String item, BuildContext context){
+  Future<void> handleMenuTap(String item, BuildContext context) async { // 👈 make async
     Navigator.pop(context); // Close drawer
 
     switch (item) {
       case 'Home Page':
         Navigator.push(
-            context, MaterialPageRoute(builder: (_) => HomePage(user: user,)));
-        break;
-      case 'Post Event':
-        Navigator.push(context, MaterialPageRoute(builder: (_) => PostEvent(user: user,)));
-        break;
-      case 'Schedule':
-        Navigator.push(context, MaterialPageRoute(builder: (_) => SchedulePage(user: user)));
-        break;
-      case 'Manage Users':
-         Navigator.push(context, MaterialPageRoute(builder: (_) => ManageUser(user: user)));
-        break;
-      case 'Profile':
-        Navigator.push(context, MaterialPageRoute(builder: (_) => ProfilePage(user: user)));
-        break;
-      case 'Logout':
-        Navigator.pushAndRemoveUntil(
-          context,
-          MaterialPageRoute(builder: (_) => LoginPage()),
-              (route) => false,
+          context, MaterialPageRoute(builder: (_) => HomePage(user: user)),
         );
         break;
+
+      case 'Post Event':
+        Navigator.push(
+          context, MaterialPageRoute(builder: (_) => PostEvent(user: user)),
+        );
+        break;
+
+      case 'Schedule':
+        Navigator.push(
+          context, MaterialPageRoute(builder: (_) => SchedulePage(user: user)),
+        );
+        break;
+
+      case 'Manage Users':
+        Navigator.push(
+          context, MaterialPageRoute(builder: (_) => ManageUser(user: user)),
+        );
+        break;
+
+      case 'Profile':
+        Navigator.push(
+          context, MaterialPageRoute(builder: (_) => ProfilePage(user: user)),
+        );
+        break;
+
+      case 'Logout':
+        Navigator.pushAndRemoveUntil(
+          context, MaterialPageRoute(builder: (_) => const LoginPage()), (route) => false,
+        );
+
+        // 🔎 write audit log BEFORE navigating away
+        try {
+          await AuditLogger.logPerDay(
+            action: 'LOGOUT',
+            uid: user.username,
+            email: user.email,
+            meta: {
+              'screen': 'AppDrawer',
+              'by': user.name,
+            },
+          );
+        } catch (_) {
+          // ignore logging failures so logout still proceeds
+        }
+
+        break;
+
       default:
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text("Unknown menu item: $item")),
@@ -62,24 +90,26 @@ class AppDrawer extends StatelessWidget {
         padding: EdgeInsets.zero,
         children: [
           DrawerHeader(
-            decoration: BoxDecoration(color: Colors.blue),
-            child: Text('Hello ${user.name} \nRole : ${user.role}',
-                style: TextStyle(color: Colors.white, fontSize: 20)),
+            decoration: const BoxDecoration(color: Colors.blue),
+            child: Text(
+              'Hello ${user.name} \nRole : ${user.role}',
+              style: const TextStyle(color: Colors.white, fontSize: 20),
+            ),
           ),
           ...menuList.map((item) => ListTile(
             leading: Icon(menuIcons[item] ?? Icons.menu),
             title: Text(item),
-            tileColor : MenuCategoryColour(item),
-            onTap: () => handleMenuTap(item, context),
-          ))
+            tileColor: MenuCategoryColour(item),
+            onTap: () async => await handleMenuTap(item, context), // 👈 await
+          )),
         ],
       ),
     );
   }
 }
 
-MenuCategoryColour(String category){
-  switch(category){
+MenuCategoryColour(String category) {
+  switch (category) {
     case 'Home Page':
       return const Color(0xFFDBFFCB);
     case 'Post Event':

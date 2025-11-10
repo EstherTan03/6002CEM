@@ -1,10 +1,12 @@
+// lib/login_page.dart
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_core/firebase_core.dart';
+import 'package:bcrypt/bcrypt.dart';
 
 import 'home_page.dart';
 import 'shared.dart';
 import 'request_account.dart';
+import 'services/audit_logger.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({Key? key}) : super(key: key);
@@ -14,109 +16,189 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  CollectionReference users = FirebaseFirestore.instance.collection('username');
+  final CollectionReference users = FirebaseFirestore.instance.collection('username');
 
-  TextEditingController usernameController = TextEditingController();
-  TextEditingController passwordController = TextEditingController();
+  final TextEditingController usernameController = TextEditingController();
+  final TextEditingController passwordController = TextEditingController();
 
   String errorMessage = '';
 
   Future<void> loginUser() async {
+    final typedUsername = usernameController.text.trim();
+    final typedPassword = passwordController.text.trim();
+
+    if (typedUsername.isEmpty || typedPassword.isEmpty) {
+      setState(() => errorMessage = 'Please enter both username and password');
+      return;
+    }
+
     try {
-      QuerySnapshot result = await users
-          .where('username', isEqualTo: usernameController.text)
-          .where('password', isEqualTo: passwordController.text)
+      // ✅ Fetch user by username only
+      final QuerySnapshot query = await users
+          .where('username', isEqualTo: typedUsername)
+          .limit(1)
           .get();
 
-      if (result.docs.isNotEmpty) {
-        // Login successful
-        var username = result.docs.first.get('username');
-        var name = result.docs.first.get('name');
-        var role = result.docs.first.get('role');
-        var email = result.docs.first.get('email');
-        var password = result.docs.first.get('password');
+      if (query.docs.isEmpty) {
+        setState(() => errorMessage = 'Invalid username or password');
 
-        showDialog(
-          context: context,
-          builder: (BuildContext context) {
-            return AlertDialog(
-              title: Text('Success'),
-              content: Text('Login Successful'),
-              actions: [
-                TextButton(
-                  onPressed: () {
-                    // After login validation
-                    final user = User(username: username, name: name, role: role, email: email, password: password);
-                    Navigator.of(context).pop(); // Close the dialog
-                    Navigator.pushReplacement(
-                      context,
-                      MaterialPageRoute(
-                        builder: (child) => HomePage(user: user),
-                      ),
-                    );
-                  },
-                  child: Text('OK'),
-                ),
-              ],
-            );
+        await AuditLogger.logPerDay(
+          action: 'LOGIN_FAILED',
+          meta: {
+            'screen': 'LoginPage',
+            'reason': 'username_not_found',
+            'username_entered': typedUsername,
           },
         );
-
-        // Navigate to next screen or dashboard
-      } else {
-        setState(() {
-          errorMessage = 'Invalid username or password';
-        });
+        return;
       }
+
+      final doc = query.docs.first;
+      final data = doc.data() as Map<String, dynamic>? ?? {};
+
+      if (data.isEmpty || !data.containsKey('password')) {
+        setState(() => errorMessage = 'Invalid username or password');
+
+        await AuditLogger.logPerDay(
+          action: 'LOGIN_FAILED',
+          meta: {
+            'screen': 'LoginPage',
+            'reason': 'user_record_missing_password',
+            'username_entered': typedUsername,
+          },
+        );
+        return;
+      }
+
+      final storedPassword = data['password'] as String? ?? '';
+      bool verified = false;
+
+      // ✅ Detect if stored password is hashed or plaintext
+      final bool isHashed = storedPassword.startsWith(r'$2a$') || storedPassword.startsWith(r'$2b$');
+
+      if (isHashed) {
+        // Compare hashed password
+        verified = BCrypt.checkpw(typedPassword, storedPassword);
+      } else {
+        // Compare plaintext password
+        if (typedPassword == storedPassword) {
+          verified = true;
+
+          // 🔥 Auto-upgrade to bcrypt hashed password
+          final newHash = BCrypt.hashpw(typedPassword, BCrypt.gensalt());
+          await users.doc(doc.id).update({'password': newHash});
+        }
+      }
+
+      if (!verified) {
+        setState(() => errorMessage = 'Invalid username or password');
+
+        await AuditLogger.logPerDay(
+          action: 'LOGIN_FAILED',
+          meta: {
+            'screen': 'LoginPage',
+            'reason': 'password_mismatch',
+            'username_entered': typedUsername,
+          },
+        );
+        return;
+      }
+
+      // ===== ✅ Login Success =====
+      final username = data['username'] ?? '';
+      final name = data['name'] ?? '';
+      final role = data['role'] ?? 'user';
+      final email = data['email'] ?? '';
+      final password = storedPassword; // hashed (safe in memory)
+
+      await AuditLogger.logPerDay(
+        action: 'LOGIN_SUCCESS',
+        uid: username,
+        email: email.isNotEmpty ? email : null,
+        meta: {
+          'screen': 'LoginPage',
+          'username_entered': typedUsername,
+        },
+      );
+
+      if (!mounted) return;
+
+      // ✅ Show success dialog
+      showDialog(
+        context: context,
+        builder: (dialogCtx) {
+          return AlertDialog(
+            title: const Text('Success'),
+            content: const Text('Login Successful'),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.of(dialogCtx).pop(); // Close dialog first
+
+                  final user = User(
+                    username: username,
+                    name: name,
+                    role: role,
+                    email: email,
+                    password: password,
+                  );
+
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(builder: (_) => HomePage(user: user)),
+                  );
+                },
+                child: const Text('OK'),
+              ),
+            ],
+          );
+        },
+      );
+
     } catch (e) {
-      setState(() {
-        errorMessage = 'Error occurred during login';
-      });
+      setState(() => errorMessage = 'Something went wrong. Please try again.');
+
+      await AuditLogger.logPerDay(
+        action: 'LOGIN_ERROR',
+        meta: {
+          'screen': 'LoginPage',
+          'username_entered': typedUsername,
+          'error': e.toString(),
+        },
+      );
     }
   }
-
 
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text('Login Page'),
-      ),
+      appBar: AppBar(title: const Text('Login Page')),
       body: Padding(
         padding: const EdgeInsets.all(20.0),
         child: Column(
           children: [
             TextField(
               controller: usernameController,
-              decoration: InputDecoration(labelText: 'Username'),
+              decoration: const InputDecoration(labelText: 'Username'),
             ),
-            SizedBox(height: 20),
+            const SizedBox(height: 20),
             TextField(
               controller: passwordController,
               obscureText: true,
-              decoration: InputDecoration(labelText: 'Password'),
+              decoration: const InputDecoration(labelText: 'Password'),
             ),
-            SizedBox(height: 20),
-            Column(
-              children: [
-                // your other widgets
-                SizedBox(height: 20),
-                RequestAccountLink(),
-              ],
-            ),
-            SizedBox(height: 20),
+            const SizedBox(height: 20),
+            const RequestAccountLink(),
+            const SizedBox(height: 20),
             ElevatedButton(
               onPressed: loginUser,
-              child: Text('Login'),
+              child: const Text('Login'),
             ),
             if (errorMessage.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 10),
-                child: Text(
-                  errorMessage,
-                  style: TextStyle(color: Colors.red),
-                ),
+                child: Text(errorMessage, style: const TextStyle(color: Colors.red)),
               ),
           ],
         ),

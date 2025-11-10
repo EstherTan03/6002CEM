@@ -6,6 +6,7 @@ import 'menu_navigation.dart';
 import 'shared.dart';
 
 import 'profile_edit.dart';
+import 'services/audit_logger.dart'; // ✅ ADD: logger import
 
 class ProfilePage extends StatefulWidget{
   final User user;
@@ -30,8 +31,35 @@ class _ProfilePageState extends State<ProfilePage> {
     passwordController = TextEditingController(text: widget.user.password ?? '');
   }
 
+  // ✅ Password strength checker
+  bool _isStrongPassword(String password) {
+    final hasMinLength = password.length >= 8;
+    final hasSpecialChar = RegExp(r'[!@#$%^&*(),.?":{}|<>_\-\\/\[\];~+=]').hasMatch(password);
+    return hasMinLength && hasSpecialChar;
+  }
+
   Future<void> saveChanges() async {
     setState(() => isSaving = true);
+
+    // ✅ Capture old/new values & what changed (no plaintext in logs)
+    final oldEmail = widget.user.email ?? '';
+    final oldPassword = widget.user.password ?? '';
+    final newEmail = emailController.text.trim();
+    final newPassword = passwordController.text.trim();
+    final emailChanged = oldEmail != newEmail;
+    final passwordChanged = oldPassword != newPassword;
+
+    // ✅ Enhanced Password Validation
+    if (passwordChanged && !_isStrongPassword(newPassword)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Password must be at least 8 characters long and include a special character.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      setState(() => isSaving = false);
+      return;
+    }
 
     try {
       await FirebaseFirestore.instance
@@ -41,6 +69,31 @@ class _ProfilePageState extends State<ProfilePage> {
         'email': emailController.text.trim(),
         'password': passwordController.text.trim(),
       });
+
+      // ✅ ADD: write logs per change (do NOT log passwords)
+      if (emailChanged) {
+        await AuditLogger.logPerDay(
+          action: 'EMAIL_CHANGED',
+          uid: widget.user.username,
+          email: newEmail.isNotEmpty ? newEmail : null,
+          meta: {
+            'screen': 'ProfilePage',
+            'email_from': oldEmail,
+            'email_to': newEmail,
+          },
+        );
+      }
+      if (passwordChanged) {
+        await AuditLogger.logPerDay(
+          action: 'PASSWORD_CHANGED',
+          uid: widget.user.username,
+          email: newEmail.isNotEmpty ? newEmail : null,
+          meta: {
+            'screen': 'ProfilePage',
+            'password_changed': true,
+          },
+        );
+      }
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Profile updated successfully')),
@@ -53,10 +106,10 @@ class _ProfilePageState extends State<ProfilePage> {
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error updating profile: $e')),
-        );
-      }
-      setState(() => isSaving = false);
+      );
     }
+    setState(() => isSaving = false);
+  }
 
   @override
   Widget build(BuildContext context) {
