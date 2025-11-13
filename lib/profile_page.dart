@@ -1,15 +1,12 @@
 import 'package:flutter/material.dart';
-
 import 'package:cloud_firestore/cloud_firestore.dart';
-
-import 'menu_navigation.dart';
-import 'shared.dart';
-
+import 'package:bcrypt/bcrypt.dart';
 import 'profile_edit.dart';
-import 'services/audit_logger.dart'; // ✅ ADD: logger import
+import 'shared.dart'; // contains the User model
 
-class ProfilePage extends StatefulWidget{
+class ProfilePage extends StatefulWidget {
   final User user;
+
   const ProfilePage({Key? key, required this.user}) : super(key: key);
 
   @override
@@ -17,118 +14,88 @@ class ProfilePage extends StatefulWidget{
 }
 
 class _ProfilePageState extends State<ProfilePage> {
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+
   late TextEditingController emailController;
   late TextEditingController passwordController;
 
   bool isEditingEmail = false;
   bool isEditingPassword = false;
-  bool isSaving = false;
 
   @override
   void initState() {
     super.initState();
-    emailController = TextEditingController(text: widget.user.email ?? '');
-    passwordController = TextEditingController(text: widget.user.password ?? '');
+    emailController = TextEditingController(text: widget.user.email);
+    passwordController = TextEditingController(text: '********');
   }
 
-  // ✅ Password strength checker
-  bool _isStrongPassword(String password) {
-    final hasMinLength = password.length >= 8;
-    final hasSpecialChar = RegExp(r'[!@#$%^&*(),.?":{}|<>_\-\\/\[\];~+=]').hasMatch(password);
-    return hasMinLength && hasSpecialChar;
-  }
-
-  Future<void> saveChanges() async {
-    setState(() => isSaving = true);
-
-    // ✅ Capture old/new values & what changed (no plaintext in logs)
-    final oldEmail = widget.user.email ?? '';
-    final oldPassword = widget.user.password ?? '';
-    final newEmail = emailController.text.trim();
-    final newPassword = passwordController.text.trim();
-    final emailChanged = oldEmail != newEmail;
-    final passwordChanged = oldPassword != newPassword;
-
-    // ✅ Enhanced Password Validation
-    if (passwordChanged && !_isStrongPassword(newPassword)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Password must be at least 8 characters long and include a special character.'),
-          backgroundColor: Colors.red,
-        ),
-      );
-      setState(() => isSaving = false);
-      return;
-    }
-
+  Future<void> _loadUser() async {
     try {
-      await FirebaseFirestore.instance
+      final doc = await _firestore
           .collection('username')
-          .doc(widget.user.username) // Assuming username is used as the document ID
-          .update({
-        'email': emailController.text.trim(),
-        'password': passwordController.text.trim(),
-      });
-
-      // ✅ ADD: write logs per change (do NOT log passwords)
-      if (emailChanged) {
-        await AuditLogger.logPerDay(
-          action: 'EMAIL_CHANGED',
-          uid: widget.user.username,
-          email: newEmail.isNotEmpty ? newEmail : null,
-          meta: {
-            'screen': 'ProfilePage',
-            'email_from': oldEmail,
-            'email_to': newEmail,
-          },
-        );
-      }
-      if (passwordChanged) {
-        await AuditLogger.logPerDay(
-          action: 'PASSWORD_CHANGED',
-          uid: widget.user.username,
-          email: newEmail.isNotEmpty ? newEmail : null,
-          meta: {
-            'screen': 'ProfilePage',
-            'password_changed': true,
-          },
-        );
-      }
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Profile updated successfully')),
-      );
-
+          .doc(widget.user.username)
+          .get();
+      final data = doc.data()!;
       setState(() {
-        isEditingEmail = false;
-        isEditingPassword = false;
+        emailController.text = data['email'];
       });
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error updating profile: $e')),
+        SnackBar(content: Text('Error loading user data: $e')),
       );
     }
-    setState(() => isSaving = false);
+  }
+
+  Future<void> _updateEmail(String newEmail) async {
+    try {
+      await _firestore
+          .collection('username')
+          .doc(widget.user.username)
+          .update({'email': newEmail});
+
+      setState(() {
+        emailController.text = newEmail;
+        isEditingEmail = false;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Email updated successfully.')),
+      );
+      await _loadUser();
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error updating email: $e')),
+      );
+    }
+  }
+
+  Future<void> _updatePassword(String newPassword) async {
+    try {
+      final hashed = BCrypt.hashpw(newPassword, BCrypt.gensalt());
+      await _firestore
+          .collection('username')
+          .doc(widget.user.username)
+          .update({'password': hashed});
+
+      setState(() {
+        isEditingPassword = false;
+        passwordController.clear();
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Password updated successfully.')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error updating password: $e')),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    // TODO: implement build
     return Scaffold(
-      appBar: AppBar(
-        title: Text('Profile'),
-        leading: Builder(
-          builder: (context) =>
-              IconButton(
-                icon: Icon(Icons.menu),
-                onPressed: () => Scaffold.of(context).openDrawer(),
-              ),
-        ),
-        backgroundColor: Color(0xFF94B4C1),
-      ),
-      drawer: AppDrawer(
-        user: widget.user,
-      ),
+      appBar: AppBar(title: const Text('Profile')),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: ListView(
@@ -137,26 +104,49 @@ class _ProfilePageState extends State<ProfilePage> {
             buildReadOnlyField('Name', widget.user.name),
             buildReadOnlyField('Role', widget.user.role),
 
+            // Email editable field
             buildEditableField(
               label: 'Email',
               controller: emailController,
               isEditing: isEditingEmail,
               onEditTap: () => setState(() => isEditingEmail = true),
+              onConfirmTap: () async {
+                final newEmail = emailController.text.trim();
+                if (newEmail.isNotEmpty) {
+                  await _updateEmail(newEmail);
+                } else {
+                  setState(() => isEditingEmail = false);
+                }
+              },
             ),
+
             buildEditableField(
               label: 'Password',
               controller: passwordController,
               isEditing: isEditingPassword,
               obscure: true,
-              onEditTap: () => setState(() => isEditingPassword = true),
-            ),
+              onEditTap: () {
+                setState(() {
+                  isEditingPassword = !isEditingPassword;
+                  if (isEditingPassword) passwordController.clear();
+                });
+              },
+              onConfirmTap: () async {
+                final newPass = passwordController.text.trim();
+                if (newPass.isNotEmpty) {
+                  await _updatePassword(newPass);
+                  setState(() {
+                    isEditingPassword = false;
+                    passwordController.text = '********'; // show masked placeholder
+                  });
+                } else {
+                  setState(() {
+                    isEditingPassword = false;
+                    passwordController.text = '********'; // also show placeholder if cancelled
+                  });
+                }
+              },
 
-            SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: isSaving ? null : saveChanges,
-              child: isSaving
-                  ? CircularProgressIndicator(color: Colors.white)
-                  : Text('Save Changes'),
             ),
           ],
         ),

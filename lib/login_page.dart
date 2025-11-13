@@ -1,12 +1,12 @@
 // lib/login_page.dart
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_core/firebase_core.dart';
+import 'package:bcrypt/bcrypt.dart';
 
 import 'home_page.dart';
 import 'shared.dart';
 import 'request_account.dart';
-import 'services/audit_logger.dart'; // 👈 add this
+import 'services/audit_logger.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({Key? key}) : super(key: key);
@@ -16,7 +16,7 @@ class LoginPage extends StatefulWidget {
 }
 
 class _LoginPageState extends State<LoginPage> {
-  CollectionReference users = FirebaseFirestore.instance.collection('username');
+  final CollectionReference users = FirebaseFirestore.instance.collection('username');
 
   final TextEditingController usernameController = TextEditingController();
   final TextEditingController passwordController = TextEditingController();
@@ -27,84 +27,137 @@ class _LoginPageState extends State<LoginPage> {
     final typedUsername = usernameController.text.trim();
     final typedPassword = passwordController.text.trim();
 
+    if (typedUsername.isEmpty || typedPassword.isEmpty) {
+      setState(() => errorMessage = 'Please enter both username and password');
+      return;
+    }
+
     try {
-      final result = await users
+      // ✅ Fetch user by username only
+      final QuerySnapshot query = await users
           .where('username', isEqualTo: typedUsername)
-          .where('password', isEqualTo: typedPassword)
+          .limit(1)
           .get();
 
-      if (result.docs.isNotEmpty) {
-        // ===== Login successful =====
-        final doc = result.docs.first;
-        final username = doc.get('username') as String? ?? '';
-        final name     = doc.get('name')     as String? ?? '';
-        final role     = doc.get('role')     as String? ?? 'user';
-        final email    = doc.get('email')    as String? ?? '';
-        final password = doc.get('password') as String? ?? ''; // (stored plaintext—consider hashing later)
+      if (query.docs.isEmpty) {
+        setState(() => errorMessage = 'Invalid username or password');
 
-        // 🔎 Write audit log (per-day structure)
-        await AuditLogger.logPerDay(
-          action: 'LOGIN_SUCCESS',
-          uid: username,                 // use uid as doc id
-          email: email.isNotEmpty ? email : null,
-          meta: {
-            'screen': 'LoginPage',
-            'username_entered': typedUsername, // DO NOT log the password
-          },
-        );
-
-        // UI dialog & navigation
-        if (!mounted) return;
-        showDialog(
-          context: context,
-          builder: (BuildContext context) {
-            return AlertDialog(
-              title: const Text('Success'),
-              content: const Text('Login Successful'),
-              actions: [
-                TextButton(
-                  onPressed: () {
-                    final user = User(
-                      username: username,
-                      name: name,
-                      role: role,
-                      email: email,
-                      password: password,
-                    );
-                    Navigator.of(context).pop(); // Close the dialog
-                    Navigator.pushReplacement(
-                      context,
-                      MaterialPageRoute(builder: (child) => HomePage(user: user)),
-                    );
-                  },
-                  child: const Text('OK'),
-                ),
-              ],
-            );
-          },
-        );
-      } else {
-        // ===== Invalid credentials =====
-        setState(() {
-          errorMessage = 'Invalid username or password';
-        });
-
-        // 🔎 Audit log for failed attempt
         await AuditLogger.logPerDay(
           action: 'LOGIN_FAILED',
           meta: {
             'screen': 'LoginPage',
+            'reason': 'username_not_found',
             'username_entered': typedUsername,
           },
         );
+        return;
       }
-    } catch (e) {
-      // ===== Error path =====
-      setState(() {
-        errorMessage = 'Error occurred during login';
-      });
 
-      // 🔎 Audit log for unexpected error
+      final doc = query.docs.first;
+      final data = doc.data() as Map<String, dynamic>? ?? {};
+
+      if (data.isEmpty || !data.containsKey('password')) {
+        setState(() => errorMessage = 'Invalid username or password');
+
+        await AuditLogger.logPerDay(
+          action: 'LOGIN_FAILED',
+          meta: {
+            'screen': 'LoginPage',
+            'reason': 'user_record_missing_password',
+            'username_entered': typedUsername,
+          },
+        );
+        return;
+      }
+
+      final storedPassword = data['password'] as String? ?? '';
+      bool verified = false;
+
+      // ✅ Detect if stored password is hashed or plaintext
+      final bool isHashed = storedPassword.startsWith(r'$2a$') || storedPassword.startsWith(r'$2b$');
+
+      if (isHashed) {
+        // Compare hashed password
+        verified = BCrypt.checkpw(typedPassword, storedPassword);
+      } else {
+        // Compare plaintext password
+        if (typedPassword == storedPassword) {
+          verified = true;
+
+          // 🔥 Auto-upgrade to bcrypt hashed password
+          final newHash = BCrypt.hashpw(typedPassword, BCrypt.gensalt());
+          await users.doc(doc.id).update({'password': newHash});
+        }
+      }
+
+      if (!verified) {
+        setState(() => errorMessage = 'Invalid username or password');
+
+        await AuditLogger.logPerDay(
+          action: 'LOGIN_FAILED',
+          meta: {
+            'screen': 'LoginPage',
+            'reason': 'password_mismatch',
+            'username_entered': typedUsername,
+          },
+        );
+        return;
+      }
+
+      // ===== ✅ Login Success =====
+      final username = data['username'] ?? '';
+      final name = data['name'] ?? '';
+      final role = data['role'] ?? 'user';
+      final email = data['email'] ?? '';
+      final password = storedPassword; // hashed (safe in memory)
+
+      await AuditLogger.logPerDay(
+        action: 'LOGIN_SUCCESS',
+        uid: username,
+        email: email.isNotEmpty ? email : null,
+        meta: {
+          'screen': 'LoginPage',
+          'username_entered': typedUsername,
+        },
+      );
+
+      if (!mounted) return;
+
+      // ✅ Show success dialog
+      showDialog(
+        context: context,
+        builder: (dialogCtx) {
+          return AlertDialog(
+            title: const Text('Success'),
+            content: const Text('Login Successful'),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.of(dialogCtx).pop(); // Close dialog first
+
+                  final user = User(
+                    username: username,
+                    name: name,
+                    role: role,
+                    email: email,
+                    password: password,
+                  );
+
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(builder: (_) => HomePage(user: user)),
+                  );
+                },
+                child: const Text('OK'),
+              ),
+            ],
+          );
+        },
+      );
+
+    } catch (e) {
+      setState(() => errorMessage = 'Something went wrong. Please try again.');
+
       await AuditLogger.logPerDay(
         action: 'LOGIN_ERROR',
         meta: {
@@ -115,6 +168,7 @@ class _LoginPageState extends State<LoginPage> {
       );
     }
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -135,12 +189,7 @@ class _LoginPageState extends State<LoginPage> {
               decoration: const InputDecoration(labelText: 'Password'),
             ),
             const SizedBox(height: 20),
-            Column(
-              children: const [
-                SizedBox(height: 20),
-                RequestAccountLink(),
-              ],
-            ),
+            const RequestAccountLink(),
             const SizedBox(height: 20),
             ElevatedButton(
               onPressed: loginUser,

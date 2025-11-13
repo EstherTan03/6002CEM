@@ -5,7 +5,7 @@ import 'package:mailer/smtp_server/gmail.dart';
 Future<void> sendEmail(String request_username, String request_email,) async {
   final body = "Hello, your account has been approved.\n"
       "Username: $request_username\n"
-      "Password: 123\n"
+      "Password: Sample123@\n"
       "You can now log in to the app.";final subject = 'Welcome';
 
 
